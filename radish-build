@@ -1,0 +1,81 @@
+#!/bin/bash 
+
+if [ "`id -u`" != "0" ]
+  then
+    echo "This script can only run as root"
+    exit 1
+fi
+
+set -e
+
+currdir=`pwd`
+mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
+imagefile=`mktemp --tmpdir="${currdir}" radish-image.XXXXXXXXXX`
+
+dd if=/dev/zero of="${imagefile}" bs=1M count=2048
+mkfs.ext4 -F "${imagefile}" 
+mount -oloop "${imagefile}" "${mountdir}"
+debootstrap wheezy "${mountdir}"
+cat > "${mountdir}/etc/apt/sources.list" << __EOF__
+deb http://ftp.us.debian.org/debian wheezy main contrib non-free
+deb-src http://ftp.us.debian.org/debian wheezy main contrib non-free
+deb http://ftp.us.debian.org/debian wheezy-updates main contrib non-free
+deb-src http://ftp.us.debian.org/debian wheezy-updates main contrib non-free
+deb http://security.debian.org/ wheezy/updates main contrib non-free
+deb-src http://security.debian.org/ wheezy/updates main contrib non-free
+__EOF__
+
+mount --bind /proc "${mountdir}/proc"
+mount --bind /sys "${mountdir}/sys"
+
+chroot "${mountdir}" apt-get update
+chroot "${mountdir}" apt-get upgrade -y
+chroot "${mountdir}" apt-get install -y --no-install-recommends \
+ linux-image-amd64 grub-pc
+chroot "${mountdir}" apt-get install -y --no-install-recommends \
+ avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server libdns88 \
+ libfam0 libsasl2-2 libsystemd-login0 libterm-readline-perl-perl lighttpd \
+ openssh-client openssh-server perl-modules python-avahi python-support \
+ screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
+chroot "${mountdir}" apt-get -f install -y
+
+for i in /proc/[0-9]*
+ do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ echo -n "Running process: "
+ readlink /proc/${pid}/exe
+ kill ${pid} )
+done
+
+sleep 5
+
+for i in /proc/[0-9]* 
+ do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ echo -n "Running process: "
+ readlink /proc/${pid}/exe
+ kill -9 ${pid} )
+done
+
+sleep 1
+
+echo 'GOTO="persistent_net_generator_end"' > \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
+rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+
+chroot "${mountdir}" adduser --disabled-password --gecos "User" user
+
+umount "${mountdir}/proc"
+umount "${mountdir}/sys"
+umount "${mountdir}"
+rmdir "${mountdir}"
+
+fsck.ext4 -f "${imagefile}"
+resize2fs -M "${imagefile}" 
+
+partclone.ext4 -N -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
+rm "${imagefile}"

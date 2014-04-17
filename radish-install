@@ -1,0 +1,364 @@
+#!/bin/bash
+
+readresponse()
+{
+dialog --defaultno --title " ${2} " --yesno "${1}" 6 60
+if [ "$?" = "0" ]
+  then response="Y"
+  else
+  if [ "$?" = "1" ]
+    then response="N"
+    else
+    response=""
+  fi
+fi
+clear
+}
+
+check="true"
+for ex in echo blockdev mount umount dd \
+ partclone.ext2 partclone.ext4 tune2fs \
+ blkid sed sleep cut tempfile head tail \
+ wc clear parted e2fsck resize2fs \
+ xargs stat sort uniq bzip2 dialog id sync 
+  do
+    loc=`which "${ex}"`
+    if [ "${loc}" = "" ]
+      then
+      echo "${ex} is missing"
+      check="false"
+    fi
+ done
+if [ ! -f root-image.bin ]
+  then
+  check="false"
+fi
+
+if [ "${check}" = "false" ]
+  then
+  echo "Some utilities are missing"
+  exit 1
+fi
+
+uid=`id -u`
+if [ "${uid}" != "0" ]
+  then
+  echo "Not running as root"
+  exit 1
+fi
+
+response=""
+declare -a devfiles
+declare -a devdescs
+declare -a menucmd
+devcount=0
+menuindex=0
+
+for i in /sys/class/block/sd* ; do
+  if [ "${response}" != "Y" \
+       -a -f "${i}/removable" \
+       -a -f "${i}/device/vendor" \
+       -a -f "${i}/device/model" ]
+    then
+    removable=`cat "${i}/removable"`
+    size=`cat "${i}/size"`
+    vendor=`cat "${i}/device/vendor" | sed -e 's/^ *//' -e 's/ *$//'`
+    model=`cat "${i}/device/model" | sed -e 's/^ *//' -e 's/ *$//'`
+    if [ "${removable}" = "1" -a "${size}" -ge "4000000" \
+         -a "${size}" -le "80000000" ]
+      then
+      dev=`cat "${i}"/dev`
+      target_dev="/dev/"`ls -l --time-style="+" /dev \
+        | egrep ^b | sed -e 's/  */ /g' \
+        | cut -d' ' -f5- | sed 's/, /:/' \
+        | fgrep "${dev}" | cut -d' ' -f2`
+
+      devnumbers_mounted=`cut -d' ' -f1 /proc/mounts | egrep ^/ \
+       | xargs stat -L --printf "%t:%T\n" | sort | uniq`
+      devnumbers=`stat -L --printf "%t:%T\n" "${target_dev}"* | sort | uniq`
+      count_total=`echo "${devnumbers_mounted} ${devnumbers}" | tr ' ' '\n' \
+       | wc -l | cut -d ' ' -f1`
+      count_unique=`echo "${devnumbers_mounted} ${devnumbers}" | tr ' ' '\n' \
+       | sort | uniq | wc -l | cut -d ' ' -f1`
+      if [ "${count_total}" = "${count_unique}" ]
+        then
+        echo "Found ${vendor} ${model}: ${target_dev}"
+        devfiles["${devcount}"]="${target_dev}"
+        devdescs["${devcount}"]="${vendor} ${model}"
+        menucmd["${menuindex}"]="${devcount}"
+        devcount=$((${devcount}+1))
+        menuindex=$((${menuindex}+1))
+        sizeg=$(((${size}*512+500000000)/1000000000))
+        menucmd["${menuindex}"]="${vendor} ${model} (${sizeg}G) \
+on ${target_dev}"
+        menuindex=$((${menuindex}+1))
+       fi
+    fi
+  fi
+done
+
+if [ "${devcount}" = "0" ]
+  then
+  echo "No target devices present"
+  exit 1
+fi
+
+tf=`tempfile -d .`
+
+if dialog --title " Device selection " \
+ --menu "Select the device for formatting" 18 60 13 \
+ "${menucmd[@]}" 2> "${tf}"
+ then
+   read retval < "${tf}"
+   response="Y"
+   target_dev=${devfiles[${retval}]}
+ else
+   response="N"
+fi
+
+rm "${tf}"
+clear
+
+if [ "${response}" != "Y" ]
+  then
+  if [ "${response}" = "" ]
+    then
+    echo "No target devices present"
+    else
+    echo "Cancelled"
+  fi
+  exit 1
+fi
+
+readresponse "Really format ${target_dev}" "Confirm device format"
+if [ "${response}" != "Y" ]
+  then
+  echo "Cancelled"
+  exit 1
+fi
+umount /mnt > /dev/null 2>&1
+set -e
+echo "Replacing partition table on ${target_dev}..."
+parted -s -a optimal "${target_dev}" mklabel msdos
+parted -s -a optimal "${target_dev}" mkpart primary ext2 1MiB 129MiB
+lastsector=`parted -ms "${target_dev}" "unit s" "print" | \
+egrep "^1:" | cut -d: -f3 | tr -d 's'`
+newsector="$((${lastsector}+1))"
+parted -msaoptimal "$target_dev" "mkpart primary ext4 ${newsector}s -1s"
+sync
+echo "Re-reading partition table"
+until blockdev --rereadpt "${target_dev}"
+do sleep 1
+done
+echo "Creating boot filesystem"
+mkfs.ext2 "${target_dev}"1
+echo "Installing root filesystem image"
+bzip2 -dc root-image.bin | partclone.ext4 -r -N -s - -o "${target_dev}2"
+
+mkdir /mnt 2>/dev/null || true
+
+echo "Mounting target root filesystem..."
+until mount -t ext4 "${target_dev}2" /mnt
+do sleep 1
+done
+echo "Done."
+
+echo "Saving /boot directory on the target root filesystem..."
+tar cz -C /mnt boot > /tmp/boot-fs.tar.gz
+echo "Done."
+
+echo "Removing /boot directory from the target root filesystem..."
+rm -rf /mnt/boot
+echo "Done."
+
+echo "Creating empty /boot directory on the target root filesystem..."
+mkdir /mnt/boot
+echo "Done."
+
+echo "Mounting target boot filesystem..."
+until mount -t ext2 "${target_dev}1" /mnt/boot
+do sleep 1
+done
+echo "Done."
+
+echo "Restoring /boot directory to the boot filesystem"
+tar xz -C /mnt < /tmp/boot-fs.tar.gz
+rm /tmp/boot-fs.tar.gz
+echo "Done."
+
+echo "Mounting /dev, /sys, /proc directories on the target root filesystem..."
+mount -t tmpfs tmpfs-dev /mnt/dev
+tar c /dev | tar x -C /mnt
+mount --bind /sys /mnt/sys
+mount --bind /proc /mnt/proc
+echo "Done."
+
+echo "Updating target filesystems UUIDs..."
+tune2fs -U random "${target_dev}1"
+tune2fs -U random "${target_dev}2"
+sync
+BOOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}1"`
+ROOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}2"`
+rm -f "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
+ln -s "${target_dev}2" "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
+echo "Done."
+
+echo "Generating list of mounted filesystems..."
+rm -f /mnt/etc/mtab
+egrep '^/dev/' /proc/mounts | grep '/mnt/' | sed -e 's@/mnt/@/@' > /mnt/etc/mtab
+echo "Done."
+
+echo "Generating /etc/fstab for the target root filesystem..."
+cat > /mnt/etc/fstab <<___EOF___
+# fstab
+UUID=${ROOT_UUID}       /       ext4    errors=remount-ro,noatime       0       1
+UUID=${BOOT_UUID}       /boot   ext2    defaults,noatime        0       1
+___EOF___
+echo "Done."
+
+echo "Enabling login on the serial console..."
+if [ -f /mnt/etc/inittab ] ; then
+  sed -i -e 's/^#\+T0:/T0:/' -e 's/ttyS0 9600 vt100$/ttyS0 115200 vt100/' \
+   /mnt/etc/inittab
+  echo "Done."
+else
+  if [ -d /mnt/etc/init/ ] ; then
+    cat > /mnt/etc/init/ttyS0.conf <<___EOF___
+# ttyS0 - getty
+#
+# This service maintains a getty on tty1 from the point the system is
+# started until it is shut down again.
+
+start on stopped rc RUNLEVEL=[2345] and (
+            not-container or
+            container CONTAINER=lxc or
+            container CONTAINER=lxc-libvirt)
+
+stop on runlevel [!2345]
+
+respawn
+exec /sbin/getty -8 115200 ttyS0
+___EOF___
+    echo "Done."
+  else
+    echo "No recognizable login configuration found."
+  fi
+fi
+
+echo "Updating GRUB..."
+cat > /mnt/etc/default/grub <<___EOF___
+# If you change this file, run 'update-grub' afterwards to update
+# /boot/grub/grub.cfg.
+# For full documentation of the options in this file, see:
+#   info -f grub -n 'Simple configuration'
+
+GRUB_DEFAULT=0
+#GRUB_HIDDEN_TIMEOUT=0
+GRUB_HIDDEN_TIMEOUT_QUIET=true
+GRUB_TIMEOUT=10
+GRUB_DISTRIBUTOR=\`lsb_release -i -s 2> /dev/null || echo Debian\`
+GRUB_CMDLINE_LINUX_DEFAULT="quiet nomodeset"
+GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"
+
+# Uncomment to enable BadRAM filtering, modify to suit your needs
+# This works with Linux (no patch required) and with any kernel that obtains
+# the memory map information from GRUB (GNU Mach, kernel of FreeBSD ...)
+#GRUB_BADRAM="0x01234567,0xfefefefe,0x89abcdef,0xefefefef"
+
+# Uncomment to disable graphical terminal (grub-pc only)
+#GRUB_TERMINAL=console
+GRUB_TERMINAL=serial
+GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
+
+# The resolution used on graphical terminal
+# note that you can use only modes which your graphic card supports via VBE
+# you can see them in real GRUB with the command \`vbeinfo'
+#GRUB_GFXMODE=640x480
+
+# Uncomment if you don't want GRUB to pass "root=UUID=xxx" parameter to Linux
+#GRUB_DISABLE_LINUX_UUID=true
+
+# Uncomment to disable generation of recovery mode menu entries
+#GRUB_DISABLE_RECOVERY="true"
+
+# Uncomment to get a beep at grub start
+#GRUB_INIT_TUNE="480 440 1"
+___EOF___
+
+chroot /mnt grub-install "${target_dev}"
+chroot /mnt update-grub
+chroot /mnt grub-install "${target_dev}"
+echo "Done."
+
+echo "Un-mounting everything..."
+until umount /mnt/proc ; do sleep 1 ; done
+until umount /mnt/sys ; do sleep 1 ; done
+until umount /mnt/dev ; do sleep 1 ; done
+until umount /mnt/boot ; do sleep 1 ; done
+until umount /mnt ; do sleep 1 ; done
+echo "Done."
+
+echo "Resizing the target root filesystem..."
+fsck.ext4 -f -y "${target_dev}2"
+resize2fs "${target_dev}2"
+echo "Done."
+
+echo "Mounting target root filesystem..."
+until mount -t ext4 "${target_dev}2" /mnt
+do sleep 1
+done
+echo "Done."
+
+hn=`cat /mnt/etc/hostname`
+until dialog --inputbox "Host name:" 8 40 "${hn}" 2> /mnt/etc/hostname.tmp
+do true
+done
+clear
+
+cat /mnt/etc/hostname.tmp > /mnt/etc/hostname
+rm /mnt/etc/hostname.tmp
+
+tf=`tempfile -d .`
+passwdchanged="N"
+
+while [ "${passwdchanged}" = "N" ]
+do
+until dialog --nocancel --insecure --title " Password assignment " \
+ --passwordform "Assign passwords for users on this device:" 17 60 8 \
+ "Password for root:" 1 1 "" 1 20 10 40 "repeat:" 1 31 "" 1 39 10 40 \
+ "Password for user:" 3 1 "" 3 20 10 40 "repeat:" 3 31 "" 3 39 10 40 \
+ "Enter passwords for root and regular user." 5 4 "" 0 0 0 0 \
+ "Use Up and Down arrow to move between fields," 6 4 "" 0 0 0 0 \
+ "Enter to finish." 7 4 "" 0 0 0 0 \
+ 2> "${tf}"
+do true
+done
+
+clear
+
+nlines=`wc -l "${tf}" | cut -d ' ' -f 1`
+nuniqlines1=`head -n 2 "${tf}" | uniq | wc -l | cut -d ' ' -f 1`
+nuniqlines2=`tail -n 2 "${tf}" | uniq | wc -l | cut -d ' ' -f 1`
+if [ "${nlines}" = "4" \
+     -a "${nuniqlines1}" = "1" \
+     -a "${nuniqlines2}" = "1" ]
+  then
+  (echo -n "root:"
+  head -n 1 "${tf}"
+  echo -n "user:"
+  tail -n 1 "${tf}") \
+  | chroot /mnt chpasswd -c SHA512 && \
+  passwdchanged="Y"
+fi
+done
+
+rm "${tf}"
+
+echo "Unmounting root filesystem"
+until umount /mnt
+do sleep 1
+done
+echo "Sync"
+sync
+
+echo "Finished"
