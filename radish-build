@@ -1,9 +1,29 @@
-#!/bin/bash 
+#!/bin/bash
 
 if [ "`id -u`" != "0" ]
   then
     echo "This script can only run as root"
     exit 1
+fi
+
+check="true"
+for ex in \
+ echo pwd mktemp dd mkfs.ext4 mount debootstrap cat chroot readlink \
+ kill cut fgrep rm umount rmdir fsck.ext4 resize2fs partclone.ext4 \
+ bzip2
+  do
+    loc=`which "${ex}"`
+    if [ "${loc}" = "" ]
+      then
+      echo "${ex} is missing"
+      check="false"
+    fi
+  done
+
+if [ "${check}" = "false" ]
+  then
+  echo "Some utilities are missing"
+  exit 1
 fi
 
 set -e
@@ -13,7 +33,7 @@ mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
 imagefile=`mktemp --tmpdir="${currdir}" radish-image.XXXXXXXXXX`
 
 dd if=/dev/zero of="${imagefile}" bs=1M count=2048
-mkfs.ext4 -F "${imagefile}" 
+mkfs.ext4 -F "${imagefile}"
 mount -oloop "${imagefile}" "${mountdir}"
 debootstrap wheezy "${mountdir}"
 cat > "${mountdir}/etc/apt/sources.list" << __EOF__
@@ -33,7 +53,7 @@ chroot "${mountdir}" apt-get upgrade -y
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
  linux-image-amd64 grub-pc
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
- avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server libdns88 \
+ avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
  libfam0 libsasl2-2 libsystemd-login0 libterm-readline-perl-perl lighttpd \
  openssh-client openssh-server perl-modules python-avahi python-support \
  screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
