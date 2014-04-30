@@ -8,8 +8,8 @@ fi
 
 check="true"
 for ex in \
- echo pwd mktemp dd mkfs.ext4 mount debootstrap cat chroot readlink \
- kill cut fgrep rm umount rmdir fsck.ext4 resize2fs partclone.ext4 \
+ echo pwd mktemp dd mkfs.ext4 mount debootstrap mv cat chroot readlink \
+ kill cut fgrep rm umount sleep rmdir fsck.ext4 resize2fs partclone.ext4 \
  bzip2
   do
     loc=`which "${ex}"`
@@ -26,7 +26,21 @@ if [ "${check}" = "false" ]
   exit 1
 fi
 
+suite="wheezy"
+kernel_package_ubuntu_lts=""
+if [ "$1" != "" ]
+  then
+  suite="$1"
+  if [ "$2" != "" ]
+    then
+    kernel_package_ubuntu_lts="$2"
+  fi
+fi
+
 set -e
+
+unset LC_CTYPE LC_MESSAGES LC_ALL
+export LANG=C
 
 currdir=`pwd`
 mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
@@ -35,36 +49,119 @@ imagefile=`mktemp --tmpdir="${currdir}" radish-image.XXXXXXXXXX`
 dd if=/dev/zero of="${imagefile}" bs=1M count=2048
 mkfs.ext4 -F "${imagefile}"
 mount -oloop "${imagefile}" "${mountdir}"
-debootstrap wheezy "${mountdir}"
-cat > "${mountdir}/etc/apt/sources.list" << __EOF__
-deb http://ftp.us.debian.org/debian wheezy main contrib non-free
-deb-src http://ftp.us.debian.org/debian wheezy main contrib non-free
-deb http://ftp.us.debian.org/debian wheezy-updates main contrib non-free
-deb-src http://ftp.us.debian.org/debian wheezy-updates main contrib non-free
-deb http://security.debian.org/ wheezy/updates main contrib non-free
-deb-src http://security.debian.org/ wheezy/updates main contrib non-free
+debootstrap "${suite}" "${mountdir}"
+
+if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
+  then
+  is_debian="true"
+  if [ `uname -i` = "x86_64" ]
+    then
+    kernel_package="linux-image-amd64"
+    else
+    kernel_package="linux-image-486"
+  fi
+  else
+  is_debian="false"
+  if [ "${kernel_package_ubuntu_lts}" = "" ]
+    then
+    kernel_package="linux-generic"
+    else
+    kernel_package="linux-generic-lts-${kernel_package_ubuntu_lts}"
+  fi
+fi
+
+if [ "${is_debian}" = "true" ]
+  then
+  cat > "${mountdir}/etc/apt/sources.list" << __EOF__
+deb http://ftp.us.debian.org/debian ${suite} main contrib non-free
+deb-src http://ftp.us.debian.org/debian ${suite} main contrib non-free
+deb http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
+deb-src http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
+deb http://security.debian.org/ ${suite}/updates main contrib non-free
+deb-src http://security.debian.org/ ${suite}/updates main contrib non-free
 __EOF__
+  else
+cat > "${mountdir}/etc/apt/sources.list" << __EOF__
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse
+__EOF__
+fi
 
 mount --bind /proc "${mountdir}/proc"
 mount --bind /sys "${mountdir}/sys"
 
+invoke_rc_d_renamed="false"
+initctl_renamed="false"
+
+if [ -f "${mountdir}/usr/sbin/invoke-rc.d" ]
+  then
+  invoke_rc_d_renamed="true"
+  mv "${mountdir}/usr/sbin/invoke-rc.d" \
+     "${mountdir}/usr/sbin/invoke-rc.d.backup"
+  cat > "${mountdir}/usr/sbin/invoke-rc.d" << __EOF__
+#!/bin/sh
+exit 0
+__EOF__
+
+  chmod +x "${mountdir}/usr/sbin/invoke-rc.d"
+  fi
+
+if [ -f "${mountdir}/sbin/initctl" ]
+  then
+  initctl_renamed="true"
+  mv "${mountdir}/sbin/initctl" \
+     "${mountdir}/sbin/initctl.backup"
+  cat > "${mountdir}/sbin/initctl" << __EOF__
+#!/bin/sh
+exit 0
+__EOF__
+
+  chmod +x "${mountdir}/sbin/initctl"
+  fi
+
 chroot "${mountdir}" apt-get update
 chroot "${mountdir}" apt-get upgrade -y
-chroot "${mountdir}" apt-get install -y --no-install-recommends \
- linux-image-amd64 grub-pc
+chroot "${mountdir}" apt-get dist-upgrade -y
+chroot "${mountdir}" sh -c "DEBIAN_FRONTEND=noninteractive \
+ apt-get install -y --no-install-recommends \
+ ${kernel_package} grub-pc"
+
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
  avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
- libfam0 libsasl2-2 libsystemd-login0 libterm-readline-perl-perl lighttpd \
- openssh-client openssh-server perl-modules python-avahi python-support \
+ lighttpd openssh-client openssh-server python-avahi python-support \
  screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
 chroot "${mountdir}" apt-get -f install -y
+
+if [ "${invoke_rc_d_renamed}" = "true" ]
+  then
+  mv "${mountdir}/usr/sbin/invoke-rc.d.backup" \
+     "${mountdir}/usr/sbin/invoke-rc.d"
+fi
+
+if [ "${initctl_renamed}" = "true" ]
+  then
+  mv "${mountdir}/sbin/initctl.backup" \
+     "${mountdir}/sbin/initctl"
+fi
+
+chroot "${mountdir}" update-initramfs -u -k all
 
 for i in /proc/[0-9]*
  do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
  pid=`echo ${i} | cut -d/ -f3`
- echo -n "Running process: "
- readlink /proc/${pid}/exe
- kill ${pid} )
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${mountdir}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill ${pid}
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ))
 done
 
 sleep 5
@@ -72,12 +169,14 @@ sleep 5
 for i in /proc/[0-9]* 
  do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
  pid=`echo ${i} | cut -d/ -f3`
- echo -n "Running process: "
- readlink /proc/${pid}/exe
- kill -9 ${pid} )
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${mountdir}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill -9 ${pid}
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ))
 done
-
-sleep 1
 
 echo 'GOTO="persistent_net_generator_end"' > \
  "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
@@ -97,5 +196,5 @@ rmdir "${mountdir}"
 fsck.ext4 -f "${imagefile}"
 resize2fs -M "${imagefile}" 
 
-partclone.ext4 -N -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
+partclone.ext4 -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
 rm "${imagefile}"
