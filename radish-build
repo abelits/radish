@@ -46,9 +46,17 @@ currdir=`pwd`
 mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
 imagefile=`mktemp --tmpdir="${currdir}" radish-image.XXXXXXXXXX`
 
+echo "Creating image file..."
+
 dd if=/dev/zero of="${imagefile}" bs=1M count=2048
 mkfs.ext4 -F "${imagefile}"
+
+echo "Mounting filesystem image file..."
+
 mount -oloop "${imagefile}" "${mountdir}"
+
+echo "Installing the base system..."
+
 debootstrap "${suite}" "${mountdir}"
 
 if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
@@ -69,6 +77,8 @@ if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
     kernel_package="linux-generic-lts-${kernel_package_ubuntu_lts}"
   fi
 fi
+
+echo "Configuring package repositories..."
 
 if [ "${is_debian}" = "true" ]
   then
@@ -92,6 +102,8 @@ deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted unive
 deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse
 __EOF__
 fi
+
+echo "Preparing system for update..."
 
 mount --bind /proc "${mountdir}/proc"
 mount --bind /sys "${mountdir}/sys"
@@ -125,18 +137,30 @@ __EOF__
   chmod +x "${mountdir}/sbin/initctl"
   fi
 
+echo "Updating repositories..."
+
 chroot "${mountdir}" apt-get update
+
+echo "Updating installed packages..."
+
 chroot "${mountdir}" apt-get upgrade -y
 chroot "${mountdir}" apt-get dist-upgrade -y
+
+echo "Installing kernel and bootloader..."
+
 chroot "${mountdir}" sh -c "DEBIAN_FRONTEND=noninteractive \
  apt-get install -y --no-install-recommends \
  ${kernel_package} grub-pc"
+
+echo "Installing additional packages..."
 
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
  avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
  lighttpd openssh-client openssh-server python-avahi python-support \
  screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
 chroot "${mountdir}" apt-get -f install -y
+
+echo "Restoring filesystem into usable state..."
 
 if [ "${invoke_rc_d_renamed}" = "true" ]
   then
@@ -150,7 +174,11 @@ if [ "${initctl_renamed}" = "true" ]
      "${mountdir}/sbin/initctl"
 fi
 
+echo "Updating initial ramdisk(s)..."
+
 chroot "${mountdir}" update-initramfs -u -k all
+
+echo "Terminating processes left from installation..."
 
 for i in /proc/[0-9]*
  do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
@@ -178,6 +206,8 @@ for i in /proc/[0-9]*
   mv "${execfile}.backup" "${execfile}" ))
 done
 
+echo "Disabling persistent network device generator rules..."
+
 echo 'GOTO="persistent_net_generator_end"' > \
  "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
 cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
@@ -186,15 +216,25 @@ cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
  "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
 rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
 
+echo "Adding regular user..."
+
 chroot "${mountdir}" adduser --disabled-password --gecos "User" user
+
+echo "Un-mounting filesystem image..."
 
 umount "${mountdir}/proc"
 umount "${mountdir}/sys"
 umount "${mountdir}"
 rmdir "${mountdir}"
 
+echo "Shrinking filesystem image..."
+
 fsck.ext4 -f "${imagefile}"
 resize2fs -M "${imagefile}" 
 
+echo "Converting filesystem image into compressed partclone format..."
+
 partclone.ext4 -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
 rm "${imagefile}"
+
+echo "Image is ready."
