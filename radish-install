@@ -155,6 +155,11 @@ mkfs.ext2 "${target_dev}"1
 echo "Installing root filesystem image"
 bzip2 -dc root-image.bin | partclone.ext4 -r -N -s - -o "${target_dev}2"
 
+echo "Updating target filesystems UUIDs..."
+tune2fs -U random "${target_dev}1"
+tune2fs -U random "${target_dev}2"
+sync
+
 mkdir /mnt 2>/dev/null || true
 
 echo "Mounting target root filesystem..."
@@ -193,10 +198,6 @@ mount --bind /sys /mnt/sys
 mount --bind /proc /mnt/proc
 echo "Done."
 
-echo "Updating target filesystems UUIDs..."
-tune2fs -U random "${target_dev}1"
-tune2fs -U random "${target_dev}2"
-sync
 BOOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}1"`
 ROOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}2"`
 rm -f "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
