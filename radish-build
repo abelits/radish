@@ -105,6 +105,8 @@ fi
 
 echo "Preparing system for update..."
 
+mount --bind /dev "${mountdir}/dev"
+mount --bind /dev/pts "${mountdir}/dev/pts"
 mount --bind /proc "${mountdir}/proc"
 mount --bind /sys "${mountdir}/sys"
 
@@ -222,6 +224,8 @@ chroot "${mountdir}" adduser --disabled-password --gecos "User" user
 
 echo "Un-mounting filesystem image..."
 
+umount "${mountdir}/dev/pts"
+umount "${mountdir}/dev"
 umount "${mountdir}/proc"
 umount "${mountdir}/sys"
 umount "${mountdir}"
