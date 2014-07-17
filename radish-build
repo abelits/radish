@@ -62,7 +62,7 @@ debootstrap "${suite}" "${mountdir}"
 if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
   then
   is_debian="true"
-  if [ `uname -i` = "x86_64" ]
+  if [ `uname -m` = "x86_64" ]
     then
     kernel_package="linux-image-amd64"
     else
