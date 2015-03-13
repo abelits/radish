@@ -1,0 +1,83 @@
+#!/bin/bash
+
+if [ "`id -u`" != "0" ]
+  then
+    echo "This script can only run as root"
+    exit 1
+fi
+
+if [ "${1}" = "" ]
+ then
+   echo "No argument, Usage: $0 <file>"
+   exit 1
+fi
+
+check="true"
+for ex in \
+ echo pwd mktemp mount umount sed grep head partclone.ext4 resize2fs \
+ fsck.ext4 bzip2
+  do
+    loc=`which "${ex}"`
+    if [ "${loc}" = "" ]
+      then
+      echo "${ex} is missing"
+      check="false"
+    fi
+  done
+
+if [ "${check}" = "false" ]
+  then
+  echo "Some utilities are missing"
+  exit 1
+fi
+
+set -e
+
+unset LC_CTYPE LC_MESSAGES LC_ALL
+export LANG=C
+
+currdir=`pwd`
+imagefile=`mount |grep -F "${currdir}" | grep -F "${1}" | \
+  sed 's/ on .*$//' | head -n 1`
+mountdir=`mount |grep -F "${currdir}" | grep -F "${1}" | \
+  sed -e 's/^.* on //' -e 's/ type .*$//' | head -n 1`
+
+echo "${imagefile}"
+echo "${mountdir}"
+
+if [ "${imagefile}" = "" -o "${mountdir}" = "" ]
+  then
+  echo "${1} is not mounted"
+  exit 1
+fi
+
+umount "${imagefile}" || {
+echo "${1} can not be unmounted"
+exit 1
+}
+
+if mount | grep -F "${imagefile}"
+  then
+    echo "${imagefile} is still mounted"
+    exit 1
+fi
+
+if mount | grep -F "${mountdir}"
+  then
+    echo "${mountdir} is still mounted"
+    exit 1
+fi
+
+rmdir "${mountdir}"
+
+echo "Shrinking filesystem image..."
+
+fsck.ext4 -f "${imagefile}"
+resize2fs -M "${imagefile}"
+
+echo "Converting filesystem image into compressed partclone format..."
+
+partclone.ext4 -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
+rm "${imagefile}"
+
+echo "Image is ready."
