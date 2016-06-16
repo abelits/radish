@@ -1,0 +1,217 @@
+#!/bin/bash
+
+if [ "`id -u`" != "0" ]
+  then
+    echo "This script can only run as root"
+    exit 1
+fi
+
+check="true"
+for ex in \
+ echo pwd mktemp mount debootstrap mv cat chroot readlink \
+ kill cut fgrep rm umount sleep rmdir
+  do
+    loc=`which "${ex}"`
+    if [ "${loc}" = "" ]
+      then
+      echo "${ex} is missing"
+      check="false"
+    fi
+  done
+
+if [ "${check}" = "false" ]
+  then
+  echo "Some utilities are missing"
+  exit 1
+fi
+
+suite="wheezy"
+kernel_package_ubuntu_lts=""
+if [ "$1" != "" ]
+  then
+  suite="$1"
+  if [ "$2" != "" ]
+    then
+    kernel_package_ubuntu_lts="$2"
+  fi
+fi
+
+set -e
+
+unset LC_CTYPE LC_MESSAGES LC_ALL
+export LANG=C
+
+currdir=`pwd`
+mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
+
+echo "Installing the base system..."
+
+debootstrap "${suite}" "${mountdir}"
+
+if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
+  then
+  is_debian="true"
+  if [ `uname -m` = "x86_64" ]
+    then
+    kernel_package="linux-image-amd64"
+    else
+    kernel_package="linux-image-486"
+  fi
+  else
+  is_debian="false"
+  if [ "${kernel_package_ubuntu_lts}" = "" ]
+    then
+    kernel_package="linux-generic"
+    else
+    kernel_package="linux-generic-lts-${kernel_package_ubuntu_lts}"
+  fi
+fi
+
+echo "Configuring package repositories..."
+
+if [ "${is_debian}" = "true" ]
+  then
+  cat > "${mountdir}/etc/apt/sources.list" << __EOF__
+deb http://ftp.us.debian.org/debian ${suite} main contrib non-free
+deb-src http://ftp.us.debian.org/debian ${suite} main contrib non-free
+deb http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
+deb-src http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
+deb http://security.debian.org/ ${suite}/updates main contrib non-free
+deb-src http://security.debian.org/ ${suite}/updates main contrib non-free
+__EOF__
+  else
+cat > "${mountdir}/etc/apt/sources.list" << __EOF__
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse 
+deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse
+__EOF__
+fi
+
+echo "Preparing system for update..."
+
+mount --bind /proc "${mountdir}/proc"
+mount --bind /sys "${mountdir}/sys"
+
+invoke_rc_d_renamed="false"
+initctl_renamed="false"
+
+if [ -f "${mountdir}/usr/sbin/invoke-rc.d" ]
+  then
+  invoke_rc_d_renamed="true"
+  mv "${mountdir}/usr/sbin/invoke-rc.d" \
+     "${mountdir}/usr/sbin/invoke-rc.d.backup"
+  cat > "${mountdir}/usr/sbin/invoke-rc.d" << __EOF__
+#!/bin/sh
+exit 0
+__EOF__
+
+  chmod +x "${mountdir}/usr/sbin/invoke-rc.d"
+  fi
+
+if [ -f "${mountdir}/sbin/initctl" ]
+  then
+  initctl_renamed="true"
+  mv "${mountdir}/sbin/initctl" \
+     "${mountdir}/sbin/initctl.backup"
+  cat > "${mountdir}/sbin/initctl" << __EOF__
+#!/bin/sh
+exit 0
+__EOF__
+
+  chmod +x "${mountdir}/sbin/initctl"
+  fi
+
+echo "Updating repositories..."
+
+chroot "${mountdir}" apt-get update
+
+echo "Updating installed packages..."
+
+chroot "${mountdir}" apt-get upgrade -y
+chroot "${mountdir}" apt-get dist-upgrade -y
+
+echo "Installing kernel and bootloader..."
+
+chroot "${mountdir}" sh -c "DEBIAN_FRONTEND=noninteractive \
+ apt-get install -y --no-install-recommends \
+ ${kernel_package} grub-pc"
+
+echo "Installing additional packages..."
+
+chroot "${mountdir}" apt-get install -y --no-install-recommends \
+ avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
+ lighttpd openssh-client openssh-server python-avahi python-support \
+ screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
+chroot "${mountdir}" apt-get -f install -y
+
+echo "Restoring filesystem into usable state..."
+
+if [ "${invoke_rc_d_renamed}" = "true" ]
+  then
+  mv "${mountdir}/usr/sbin/invoke-rc.d.backup" \
+     "${mountdir}/usr/sbin/invoke-rc.d"
+fi
+
+if [ "${initctl_renamed}" = "true" ]
+  then
+  mv "${mountdir}/sbin/initctl.backup" \
+     "${mountdir}/sbin/initctl"
+fi
+
+echo "Updating initial ramdisk(s)..."
+
+chroot "${mountdir}" update-initramfs -u -k all
+
+echo "Terminating processes left from installation..."
+
+for i in /proc/[0-9]*
+ do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${mountdir}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill ${pid}
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ))
+done
+
+sleep 5
+
+for i in /proc/[0-9]* 
+ do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${mountdir}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill -9 ${pid}
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ))
+done
+
+echo "Disabling persistent network device generator rules..."
+
+echo 'GOTO="persistent_net_generator_end"' > \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
+ "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
+rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+
+echo "Adding regular user..."
+
+chroot "${mountdir}" adduser --disabled-password --gecos "User" user
+
+echo "Un-mounting filesystem image..."
+
+umount "${mountdir}/proc"
+umount "${mountdir}/sys"
+
+echo "Directory ${mountdir} is ready."
