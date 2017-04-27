@@ -65,7 +65,7 @@ for i in /sys/class/block/sd* ; do
     vendor=`cat "${i}/device/vendor" | sed -e 's/^ *//' -e 's/ *$//'`
     model=`cat "${i}/device/model" | sed -e 's/^ *//' -e 's/ *$//'`
     if [ "${removable}" = "1" -a "${size}" -ge "4000000" \
-         -a "${size}" -le "300000000" ]
+         -a "${size}" -le "4294967296" ]
       then
       dev=`cat "${i}"/dev`
       target_dev="/dev/"`ls -l --time-style="+" /dev \
