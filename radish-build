@@ -221,15 +221,18 @@ sleep 5
 
 termprocesses "${mountdir}" -KILL
 
-echo "Disabling persistent network device generator rules..."
+if [ -f "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" ]
+  then
+  echo "Disabling persistent network device generator rules..."
 
-echo 'GOTO="persistent_net_generator_end"' > \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
-cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
-cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
-rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  echo 'GOTO="persistent_net_generator_end"' > \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
+  rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+fi
 
 echo "Adding regular user..."
 
