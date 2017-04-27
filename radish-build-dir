@@ -1,5 +1,32 @@
 #!/bin/bash
 
+termprocesses()
+{
+for i in /proc/[0-9]*
+ do readlink "${i}/root" | fgrep -q "${1}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${1}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill "${2}" "${pid}" || true
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ) || true ) || true
+done
+}
+
+cleanup()
+{
+set +e
+
+if [ "${mountdir}" != "" -a -d "${mountdir}" ]
+then
+  termprocesses "${mountdir}" -KILL
+  [ -d "${mountdir}/proc" ] && umount "${mountdir}/proc" 2>/dev/null
+  [ -d "${mountdir}/sys" ] && umount "${mountdir}/sys" 2>/dev/null
+fi
+}
+
 if [ "`id -u`" != "0" ]
   then
     echo "This script can only run as root"
@@ -27,12 +54,17 @@ fi
 
 suite="wheezy"
 kernel_package_ubuntu_lts=""
+url=""
 if [ "$1" != "" ]
   then
   suite="$1"
   if [ "$2" != "" ]
     then
     kernel_package_ubuntu_lts="$2"
+  fi
+  if [ "$3" != "" ]
+    then
+    url="$3"
   fi
 fi
 
@@ -41,23 +73,17 @@ set -e
 unset LC_CTYPE LC_MESSAGES LC_ALL
 export LANG=C
 
+trap cleanup EXIT
+
 currdir=`pwd`
 mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
 
 echo "Installing the base system..."
 
-debootstrap "${suite}" "${mountdir}"
+debootstrap "${suite}" "${mountdir}" "${url}"
 
-if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
+if grep -q "/ubuntu[/ ]" "${mountdir}/etc/apt/sources.list"
   then
-  is_debian="true"
-  if [ `uname -m` = "x86_64" ]
-    then
-    kernel_package="linux-image-amd64"
-    else
-    kernel_package="linux-image-486"
-  fi
-  else
   is_debian="false"
   if [ "${kernel_package_ubuntu_lts}" = "" ]
     then
@@ -65,30 +91,44 @@ if fgrep -q ".debian.org/" "${mountdir}/etc/apt/sources.list"
     else
     kernel_package="linux-generic-lts-${kernel_package_ubuntu_lts}"
   fi
+  else
+  is_debian="true"
+  if [ `uname -m` = "x86_64" ]
+    then
+    kernel_package="linux-image-amd64"
+    else
+    kernel_package="linux-image-486"
+  fi
 fi
 
 echo "Configuring package repositories..."
 
 if [ "${is_debian}" = "true" ]
   then
+  if [ "${url}" = "" ]
+    then
+    url="http://ftp.us.debian.org/debian"
+  fi
   cat > "${mountdir}/etc/apt/sources.list" << __EOF__
-deb http://ftp.us.debian.org/debian ${suite} main contrib non-free
-deb-src http://ftp.us.debian.org/debian ${suite} main contrib non-free
-deb http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
-deb-src http://ftp.us.debian.org/debian ${suite}-updates main contrib non-free
-deb http://security.debian.org/ ${suite}/updates main contrib non-free
-deb-src http://security.debian.org/ ${suite}/updates main contrib non-free
+deb ${url} ${suite} main contrib non-free
+deb-src ${url} ${suite} main contrib non-free
+deb ${url} ${suite}-updates main contrib non-free
+deb-src ${url} ${suite}-updates main contrib non-free
 __EOF__
   else
+  if [ "${url}" = "" ]
+    then
+    url="http://us.archive.ubuntu.com/ubuntu/"
+  fi
 cat > "${mountdir}/etc/apt/sources.list" << __EOF__
-deb http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse 
-deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite} main restricted universe multiverse
-deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse 
-deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-updates main restricted universe multiverse
-deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse 
-deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-backports main restricted universe multiverse
-deb http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse 
-deb-src http://us.archive.ubuntu.com/ubuntu/ ${suite}-security main restricted universe multiverse
+deb ${url} ${suite} main restricted universe multiverse
+deb-src ${url} ${suite} main restricted universe multiverse
+deb ${url} ${suite}-updates main restricted universe multiverse
+deb-src ${url} ${suite}-updates main restricted universe multiverse
+deb ${url} ${suite}-backports main restricted universe multiverse
+deb-src ${url} ${suite}-backports main restricted universe multiverse
+deb ${url} ${suite}-security main restricted universe multiverse
+deb-src ${url} ${suite}-security main restricted universe multiverse
 __EOF__
 fi
 
@@ -145,7 +185,7 @@ echo "Installing additional packages..."
 
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
  avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
- lighttpd openssh-client openssh-server python-avahi python-support \
+ lighttpd openssh-client openssh-server python-avahi \
  screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
 chroot "${mountdir}" apt-get -f install -y
 
@@ -169,41 +209,24 @@ chroot "${mountdir}" update-initramfs -u -k all
 
 echo "Terminating processes left from installation..."
 
-for i in /proc/[0-9]*
- do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
- pid=`echo ${i} | cut -d/ -f3`
- execfile=`readlink /proc/${pid}/exe`
- echo "${execfile}" | fgrep -q "${mountdir}" && (\
-  echo "Running process: ${execfile}"
-  mv "${execfile}" "${execfile}.backup"
-  kill ${pid}
-  sleep 2
-  mv "${execfile}.backup" "${execfile}" ))
-done
+termprocesses "${mountdir}" -TERM
 
 sleep 5
 
-for i in /proc/[0-9]* 
- do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
- pid=`echo ${i} | cut -d/ -f3`
- execfile=`readlink /proc/${pid}/exe`
- echo "${execfile}" | fgrep -q "${mountdir}" && (\
-  echo "Running process: ${execfile}"
-  mv "${execfile}" "${execfile}.backup"
-  kill -9 ${pid}
-  sleep 2
-  mv "${execfile}.backup" "${execfile}" ))
-done
+termprocesses "${mountdir}" -KILL
 
-echo "Disabling persistent network device generator rules..."
+if [ -f "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" ]
+  then
+  echo "Disabling persistent network device generator rules..."
 
-echo 'GOTO="persistent_net_generator_end"' > \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
-cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
-cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
- "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
-rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  echo 'GOTO="persistent_net_generator_end"' > \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules" >> \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+  cat "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp" > \
+   "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules"
+  rm "${mountdir}/lib/udev/rules.d/75-persistent-net-generator.rules.tmp"
+fi
 
 echo "Adding regular user..."
 
@@ -213,5 +236,7 @@ echo "Un-mounting filesystem image..."
 
 umount "${mountdir}/proc"
 umount "${mountdir}/sys"
+
+trap "" EXIT
 
 echo "Directory ${mountdir} is ready."
