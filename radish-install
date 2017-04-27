@@ -140,7 +140,7 @@ umount /mnt > /dev/null 2>&1
 set -e
 echo "Replacing partition table on ${target_dev}..."
 parted -s -a optimal "${target_dev}" mklabel msdos
-parted -s -a optimal "${target_dev}" mkpart primary ext2 1MiB 129MiB
+parted -s -a optimal "${target_dev}" mkpart primary ext2 1MiB 257MiB
 lastsector=`parted -ms "${target_dev}" "unit s" "print" | \
 egrep "^1:" | cut -d: -f3 | tr -d 's'`
 newsector="$((${lastsector}+1))"
