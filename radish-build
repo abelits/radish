@@ -1,5 +1,38 @@
 #!/bin/bash
 
+termprocesses()
+{
+for i in /proc/[0-9]*
+ do readlink "${i}/root" | fgrep -q "${1}" && (\
+ pid=`echo ${i} | cut -d/ -f3`
+ execfile=`readlink /proc/${pid}/exe`
+ echo "${execfile}" | fgrep -q "${1}" && (\
+  echo "Running process: ${execfile}"
+  mv "${execfile}" "${execfile}.backup"
+  kill "${2}" "${pid}" || true
+  sleep 2
+  mv "${execfile}.backup" "${execfile}" ) || true ) || true
+done
+}
+
+cleanup()
+{
+set +e
+
+if [ "${mountdir}" != "" -a -d "${mountdir}" ]
+then
+  termprocesses "${mountdir}" -KILL
+  [ -d "${mountdir}/proc" ] && umount "${mountdir}/proc" 2>/dev/null
+  [ -d "${mountdir}/sys" ] && umount "${mountdir}/sys" 2>/dev/null
+  umount "${mountdir}" 2>/dev/null
+  rmdir "${mountdir}"
+fi
+if [ "${imagefile}" != "" -a -f "${imagefile}" ]
+  then
+  rm "${imagefile}"
+fi
+}
+
 if [ "`id -u`" != "0" ]
   then
     echo "This script can only run as root"
@@ -41,6 +74,8 @@ set -e
 
 unset LC_CTYPE LC_MESSAGES LC_ALL
 export LANG=C
+
+trap cleanup EXIT
 
 currdir=`pwd`
 mountdir=`mktemp -d --tmpdir="${currdir}" radish-mount.XXXXXXXXXX`
@@ -180,31 +215,11 @@ chroot "${mountdir}" update-initramfs -u -k all
 
 echo "Terminating processes left from installation..."
 
-for i in /proc/[0-9]*
- do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
- pid=`echo ${i} | cut -d/ -f3`
- execfile=`readlink /proc/${pid}/exe`
- echo "${execfile}" | fgrep -q "${mountdir}" && (\
-  echo "Running process: ${execfile}"
-  mv "${execfile}" "${execfile}.backup"
-  kill ${pid}
-  sleep 2
-  mv "${execfile}.backup" "${execfile}" ))
-done
+termprocesses "${mountdir}" -TERM
 
 sleep 5
 
-for i in /proc/[0-9]* 
- do readlink "${i}/root" | fgrep -q "${mountdir}" && (\
- pid=`echo ${i} | cut -d/ -f3`
- execfile=`readlink /proc/${pid}/exe`
- echo "${execfile}" | fgrep -q "${mountdir}" && (\
-  echo "Running process: ${execfile}"
-  mv "${execfile}" "${execfile}.backup"
-  kill -9 ${pid}
-  sleep 2
-  mv "${execfile}.backup" "${execfile}" ))
-done
+termprocesses "${mountdir}" -KILL
 
 echo "Disabling persistent network device generator rules..."
 
@@ -236,5 +251,7 @@ echo "Converting filesystem image into compressed partclone format..."
 
 partclone.ext4 -c -s "${imagefile}" -o - | bzip2 -9 -c > root-image.bin
 rm "${imagefile}"
+
+trap "" EXIT
 
 echo "Image is ready."
