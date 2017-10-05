@@ -99,7 +99,7 @@ echo "Installing the base system..."
 
 debootstrap "${suite}" "${mountdir}" "${url}"
 
-if grep -q "/ubuntu[/ ]" "${mountdir}/etc/apt/sources.list"
+if grep -q "/ubuntu[/ -]" "${mountdir}/etc/apt/sources.list"
   then
   is_debian="false"
   if [ "${kernel_package_ubuntu_lts}" = "" ]
