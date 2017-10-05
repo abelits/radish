@@ -36,7 +36,7 @@ fi
 check="true"
 for ex in \
  echo pwd mktemp mount debootstrap mv cat chroot readlink \
- kill cut fgrep rm umount sleep rmdir
+ kill cut grep fgrep rm umount sleep rmdir
   do
     loc=`which "${ex}"`
     if [ "${loc}" = "" ]
@@ -82,7 +82,7 @@ echo "Installing the base system..."
 
 debootstrap "${suite}" "${mountdir}" "${url}"
 
-if grep -q "/ubuntu[/ ]" "${mountdir}/etc/apt/sources.list"
+if grep -Eq '^Label: *Ubuntu' "${mountdir}/var/lib/apt/lists/"*_Release
   then
   is_debian="false"
   if [ "${kernel_package_ubuntu_lts}" = "" ]
