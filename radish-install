@@ -54,18 +54,26 @@ declare -a menucmd
 devcount=0
 menuindex=0
 
-for i in /sys/class/block/sd* ; do
+for i in /sys/class/block/sd* /sys/class/block/mmcblk* \
+         /sys/class/block/nvme* /sys/class/block/nbd* ; do
   if [ "${response}" != "Y" \
-       -a -f "${i}/removable" \
-       -a -f "${i}/device/vendor" \
-       -a -f "${i}/device/model" ]
+       -a -f "${i}/removable" ]
     then
     removable=`cat "${i}/removable"`
     size=`cat "${i}/size"`
-    vendor=`cat "${i}/device/vendor" | sed -e 's/^ *//' -e 's/ *$//'`
-    model=`cat "${i}/device/model" | sed -e 's/^ *//' -e 's/ *$//'`
-    if [ "${removable}" = "1" -a "${size}" -ge "4000000" \
-         -a "${size}" -le "4294967296" ]
+    if [ -f "${i}/device/vendor" ]
+     then
+       vendor=`cat "${i}/device/vendor" | sed -e 's/^ *//' -e 's/ *$//'`
+     else
+       vendor='-'
+    fi
+    if [ -f "${i}/device/model" ]
+     then
+       model=`cat "${i}/device/model" | sed -e 's/^ *//' -e 's/ *$//'`
+     else
+       model='-'
+    fi
+    if [ "${size}" -ge "4000000" ]
       then
       dev=`cat "${i}"/dev`
       target_dev="/dev/"`ls -l --time-style="+" /dev \
@@ -150,20 +158,32 @@ echo "Re-reading partition table"
 until blockdev --rereadpt "${target_dev}"
 do sleep 1
 done
+if [ -b "${target_dev}p1" ]
+ then
+   target_dev_part1="${target_dev}p1"
+ else
+   target_dev_part1="${target_dev}1"
+fi
+if [ -b "${target_dev}p2" ]
+ then
+   target_dev_part2="${target_dev}p2"
+ else
+   target_dev_part2="${target_dev}2"
+fi
 echo "Creating boot filesystem"
-mkfs.ext2 "${target_dev}"1
+mkfs.ext2 "${target_dev_part1}"
 echo "Installing root filesystem image"
-bzip2 -dc root-image.bin | partclone.ext4 -r -N -s - -o "${target_dev}2"
+bzip2 -dc root-image.bin | partclone.ext4 -r -N -s - -o "${target_dev_part2}"
 
 echo "Updating target filesystems UUIDs..."
-tune2fs -U random "${target_dev}1"
-tune2fs -U random "${target_dev}2"
+tune2fs -U random "${target_dev_part1}"
+tune2fs -U random "${target_dev_part2}"
 sync
 
 mkdir /mnt 2>/dev/null || true
 
 echo "Mounting target root filesystem..."
-until mount -t ext4 "${target_dev}2" /mnt
+until mount -t ext4 "${target_dev_part2}" /mnt
 do sleep 1
 done
 echo "Done."
@@ -181,7 +201,7 @@ mkdir /mnt/boot
 echo "Done."
 
 echo "Mounting target boot filesystem..."
-until mount -t ext2 "${target_dev}1" /mnt/boot
+until mount -t ext2 "${target_dev_part1}" /mnt/boot
 do sleep 1
 done
 echo "Done."
@@ -198,10 +218,10 @@ mount --bind /sys /mnt/sys
 mount --bind /proc /mnt/proc
 echo "Done."
 
-BOOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}1"`
-ROOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev}2"`
+BOOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev_part1}"`
+ROOT_UUID=`blkid -s UUID -o value -n ext2,ext3,ext4 "${target_dev_part2}"`
 rm -f "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
-ln -s "${target_dev}2" "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
+ln -s "${target_dev_part2}" "/mnt/dev/disk/by-uuid/${ROOT_UUID}"
 echo "Done."
 
 echo "Generating list of mounted filesystems..."
@@ -300,12 +320,12 @@ until umount /mnt ; do sleep 1 ; done
 echo "Done."
 
 echo "Resizing the target root filesystem..."
-fsck.ext4 -f -y "${target_dev}2"
-resize2fs "${target_dev}2"
+fsck.ext4 -f -y "${target_dev_part2}"
+resize2fs "${target_dev_part2}"
 echo "Done."
 
 echo "Mounting target root filesystem..."
-until mount -t ext4 "${target_dev}2" /mnt
+until mount -t ext4 "${target_dev_part2}" /mnt
 do sleep 1
 done
 echo "Done."
