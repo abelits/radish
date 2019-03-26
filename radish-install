@@ -16,8 +16,9 @@ clear
 }
 
 check="true"
-for ex in echo blockdev mount umount dd \
- partclone.ext2 partclone.ext4 tune2fs \
+for ex in echo blockdev mkfs.ext2 mount umount dd \
+ partclone.ext2 partclone.ext4 partclone.restore \
+ tar tune2fs \
  blkid sed sleep cut tempfile head tail \
  wc clear parted e2fsck resize2fs \
  xargs stat sort uniq bzip2 dialog id sync 
