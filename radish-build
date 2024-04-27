@@ -202,8 +202,8 @@ echo "Installing additional packages..."
 
 chroot "${mountdir}" apt-get install -y --no-install-recommends \
  avahi-autoipd avahi-daemon avahi-utils dbus isc-dhcp-server \
- lighttpd openssh-client openssh-server python-avahi \
- screen tftp-hpa tftpd-hpa bzip2 dialog partclone parted less psmisc 
+ lighttpd openssh-client openssh-server screen tftp-hpa tftpd-hpa \
+ bzip2 dialog partclone parted less psmisc initramfs-tools
 chroot "${mountdir}" apt-get -f install -y
 
 echo "Restoring filesystem into usable state..."
