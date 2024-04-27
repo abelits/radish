@@ -88,7 +88,7 @@ imagefile=`mktemp --tmpdir="${currdir}" radish-image.XXXXXXXXXX`
 
 echo "Creating image file..."
 
-dd if=/dev/zero of="${imagefile}" bs=1M count=2048
+dd if=/dev/zero of="${imagefile}" bs=1M count=3072
 mkfs.ext4 -F "${imagefile}"
 
 echo "Mounting filesystem image file..."
