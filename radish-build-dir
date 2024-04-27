@@ -82,7 +82,7 @@ echo "Installing the base system..."
 
 debootstrap "${suite}" "${mountdir}" "${url}"
 
-if grep -Eq '^Label: *Ubuntu' "${mountdir}/var/lib/apt/lists/"*_Release
+if grep -Eq '^Label: *Ubuntu' "${mountdir}/var/lib/apt/lists/"*_*Release
   then
   is_debian="false"
   if [ "${kernel_package_ubuntu_lts}" = "" ]
