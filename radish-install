@@ -174,7 +174,7 @@ fi
 echo "Creating boot filesystem"
 mkfs.ext2 "${target_dev_part1}"
 echo "Installing root filesystem image"
-bzip2 -dc root-image.bin | partclone.ext4 -r -N -s - -o "${target_dev_part2}"
+bzip2 -dc root-image.bin | partclone.ext4 -r -s - -o "${target_dev_part2}"
 
 echo "Updating target filesystems UUIDs..."
 tune2fs -U random "${target_dev_part1}"
