@@ -19,7 +19,7 @@ check="true"
 for ex in echo blockdev mkfs.ext2 mount umount dd \
  partclone.ext2 partclone.ext4 partclone.restore \
  tar tune2fs \
- blkid sed sleep cut tempfile head tail \
+ blkid sed sleep cut mktemp head tail \
  wc clear parted e2fsck resize2fs \
  xargs stat sort uniq bzip2 dialog id sync 
   do
@@ -112,7 +112,7 @@ if [ "${devcount}" = "0" ]
   exit 1
 fi
 
-tf=`tempfile -d .`
+tf=`mktemp --tmpdir=.`
 
 if dialog --title " Device selection " \
  --menu "Select the device for formatting" 18 60 13 \
@@ -340,7 +340,7 @@ clear
 cat /mnt/etc/hostname.tmp > /mnt/etc/hostname
 rm /mnt/etc/hostname.tmp
 
-tf=`tempfile -d .`
+tf=`mktemp --tmpdir=.`
 passwdchanged="N"
 
 while [ "${passwdchanged}" = "N" ]
