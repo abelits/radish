@@ -331,7 +331,7 @@ do sleep 1
 done
 echo "Done."
 
-hn=`cat /mnt/etc/hostname`
+hn=`cat /mnt/etc/hostname || echo "localhost"`
 until dialog --inputbox "Host name:" 8 40 "${hn}" 2> /mnt/etc/hostname.tmp
 do true
 done
